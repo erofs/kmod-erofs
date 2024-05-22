@@ -5,6 +5,7 @@
  * Copyright (C) 2022, Alibaba Cloud
  */
 #include "internal.h"
+#include "xattr.h"
 
 struct erofs_qstr {
 	const unsigned char *name;
@@ -214,4 +215,8 @@ static struct dentry *erofs_lookup(struct inode *dir, struct dentry *dentry,
 
 const struct inode_operations erofs_dir_iops = {
 	.lookup = erofs_lookup,
+#ifdef CONFIG_EROFS_FS_XATTR
+	.getxattr	= generic_getxattr,
+	.listxattr	= erofs_listxattr,
+#endif
 };

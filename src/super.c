@@ -8,6 +8,7 @@
 #include <linux/statfs.h>
 #include <linux/parser.h>
 #include "internal.h"
+#include "xattr.h"
 
 static struct kmem_cache *erofs_inode_cachep __read_mostly;
 
@@ -106,6 +107,9 @@ static int erofs_read_superblock(struct super_block *sb)
 
 	sbi->total_blocks = le32_to_cpu(dsb->blocks);
 	sbi->meta_blkaddr = le32_to_cpu(dsb->meta_blkaddr);
+#ifdef CONFIG_EROFS_FS_XATTR
+	sbi->xattr_blkaddr = le32_to_cpu(dsb->xattr_blkaddr);
+#endif
 	sbi->islotbits = ilog2(sizeof(struct erofs_inode_compact));
 	sbi->root_nid = le16_to_cpu(dsb->root_nid);
 	sbi->inos = le64_to_cpu(dsb->inos);
@@ -119,6 +123,64 @@ static int erofs_read_superblock(struct super_block *sb)
 out:
 	erofs_put_metabuf(&buf);
 	return ret;
+}
+
+static void erofs_default_options(struct erofs_sb_info *sbi)
+{
+	set_opt(sbi, XATTR_USER);
+}
+
+enum {
+	Opt_user_xattr,
+	Opt_nouser_xattr,
+	Opt_err
+};
+
+static match_table_t erofs_tokens = {
+	{Opt_user_xattr, "user_xattr"},
+	{Opt_nouser_xattr, "nouser_xattr"},
+	{Opt_err, NULL}
+};
+
+static int erofs_parse_options(struct super_block *sb, char *options)
+{
+	substring_t args[MAX_OPT_ARGS];
+	char *p;
+
+	if (!options)
+		return 0;
+
+	while ((p = strsep(&options, ",")) != NULL) {
+		int token;
+
+		if (!*p)
+			continue;
+
+		args[0].to = args[0].from = NULL;
+		token = match_token(p, erofs_tokens, args);
+
+		switch (token) {
+#ifdef CONFIG_EROFS_FS_XATTR
+		case Opt_user_xattr:
+			set_opt(EROFS_SB(sb), XATTR_USER);
+			break;
+		case Opt_nouser_xattr:
+			clear_opt(EROFS_SB(sb), XATTR_USER);
+			break;
+#else
+		case Opt_user_xattr:
+			infoln("user_xattr options not supported");
+			break;
+		case Opt_nouser_xattr:
+			infoln("nouser_xattr options not supported");
+			break;
+#endif
+		default:
+			erofs_err(sb, "Unrecognized mount option \"%s\" or missing value", p);
+			return -EINVAL;
+		}
+	}
+	return 0;
 }
 
 static int erofs_fill_super(struct super_block *sb, void *data, int silent)
@@ -153,6 +215,13 @@ static int erofs_fill_super(struct super_block *sb, void *data, int silent)
 		}
 	}
 	sb->s_time_gran = 1;
+#ifdef CONFIG_EROFS_FS_XATTR
+	sb->s_xattr = erofs_xattr_handlers;
+#endif
+	erofs_default_options(sbi);
+	err = erofs_parse_options(sb, data);
+	if (err)
+		return err;
 
 	inode = erofs_iget(sb, sbi->root_nid);
 	if (IS_ERR(inode))

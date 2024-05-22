@@ -16,6 +16,7 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include "erofs_fs.h"
+#include "compat.h"
 
 /* redefine pr_fmt "erofs: " */
 #undef pr_fmt
@@ -46,6 +47,9 @@ typedef u32 erofs_blk_t;
 struct erofs_sb_info {
 	u32 total_blocks;
 	u32 meta_blkaddr;
+#ifdef CONFIG_EROFS_FS_XATTR
+	u32 xattr_blkaddr;
+#endif
 
 	unsigned char islotbits;	/* inode slot unit size in bit shift */
 	unsigned char blkszbits;	/* filesystem block size in bit shift */
@@ -60,10 +64,19 @@ struct erofs_sb_info {
 
 	u8 uuid[16];                    /* 128-bit uuid for volume */
 	u8 volume_name[16];             /* volume name */
+
+	unsigned int mount_opt;
 };
 
 #define EROFS_SB(sb) ((struct erofs_sb_info *)(sb)->s_fs_info)
 #define EROFS_I_SB(inode) ((struct erofs_sb_info *)(inode)->i_sb->s_fs_info)
+
+/* Mount flags set via mount options or defaults */
+#define EROFS_MOUNT_XATTR_USER		0x00000010
+
+#define clear_opt(sbi, option)	((sbi)->mount_opt &= ~EROFS_MOUNT_##option)
+#define set_opt(sbi, option)	((sbi)->mount_opt |= EROFS_MOUNT_##option)
+#define test_opt(sbi, option)	((sbi)->mount_opt & EROFS_MOUNT_##option)
 
 enum erofs_kmap_type {
 	EROFS_NO_KMAP,		/* don't map the buffer */
@@ -84,12 +97,22 @@ struct erofs_buf {
 #define erofs_pos(sb, blk)	((erofs_off_t)(blk) << (sb)->s_blocksize_bits)
 #define erofs_iblks(i)	(round_up((i)->i_size, (i)->i_sb->s_blocksize) >> (i)->i_blkbits)
 
+/* atomic flag definitions */
+#define EROFS_I_EA_INITED_BIT	0
+
+/* bitlock definitions (arranged in reverse order) */
+#define EROFS_I_BL_XATTR_BIT	(BITS_PER_LONG - 1)
+
 struct erofs_inode {
 	erofs_nid_t nid;
+	unsigned long flags;	/* atomic flags (including bitlocks) */
 
 	unsigned char datalayout;
 	unsigned char inode_isize;
 	unsigned int xattr_isize;
+
+	unsigned int xattr_shared_count;
+	unsigned int *xattr_shared_xattrs;
 
 	erofs_blk_t raw_blkaddr;
 

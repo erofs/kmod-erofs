@@ -110,12 +110,62 @@ struct erofs_inode_extended {
 	__u8   i_reserved2[16];
 };
 
+/*
+ * inline xattrs (n == i_xattr_icount):
+ * erofs_xattr_ibody_header(1) + (n - 1) * 4 bytes
+ *          12 bytes           /                   \
+ *                            /                     \
+ *                           /-----------------------\
+ *                           |  erofs_xattr_entries+ |
+ *                           +-----------------------+
+ * inline xattrs must starts in erofs_xattr_ibody_header,
+ * for read-only fs, no need to introduce h_refcount
+ */
+struct erofs_xattr_ibody_header {
+	__le32 h_name_filter;		/* bit value 1 indicates not-present */
+	__u8   h_shared_count;
+	__u8   h_reserved2[7];
+	__le32 h_shared_xattrs[];       /* shared xattr id array */
+};
+
+/* Name indexes */
+#define EROFS_XATTR_INDEX_USER              1
+#define EROFS_XATTR_INDEX_POSIX_ACL_ACCESS  2
+#define EROFS_XATTR_INDEX_POSIX_ACL_DEFAULT 3
+#define EROFS_XATTR_INDEX_TRUSTED           4
+#define EROFS_XATTR_INDEX_LUSTRE            5
+#define EROFS_XATTR_INDEX_SECURITY          6
+
+/* xattr entry (for both inline & shared xattrs) */
+struct erofs_xattr_entry {
+	__u8   e_name_len;      /* length of name */
+	__u8   e_name_index;    /* attribute name index */
+	__le16 e_value_size;    /* size of attribute value */
+	/* followed by e_name and e_value */
+	char   e_name[];        /* attribute name */
+};
+
+/* long xattr name prefix */
+struct erofs_xattr_long_prefix {
+	__u8   base_index;	/* short xattr name prefix index */
+	char   infix[];		/* infix apart from short prefix */
+};
+
 static inline unsigned int erofs_xattr_ibody_size(__le16 i_xattr_icount)
 {
 	if (!i_xattr_icount)
 		return 0;
 
-	return 12 + sizeof(__u32) * (le16_to_cpu(i_xattr_icount) - 1);
+	return sizeof(struct erofs_xattr_ibody_header) +
+		sizeof(__u32) * (le16_to_cpu(i_xattr_icount) - 1);
+}
+
+#define EROFS_XATTR_ALIGN(size) round_up(size, sizeof(struct erofs_xattr_entry))
+
+static inline unsigned int erofs_xattr_entry_size(struct erofs_xattr_entry *e)
+{
+	return EROFS_XATTR_ALIGN(sizeof(struct erofs_xattr_entry) +
+				 e->e_name_len + le16_to_cpu(e->e_value_size));
 }
 
 /* dirent sorts in alphabet order, thus we can do binary search */

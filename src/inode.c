@@ -5,6 +5,7 @@
  * Copyright (C) 2021, Alibaba Cloud
  */
 #include "internal.h"
+#include "xattr.h"
 
 static void *erofs_read_inode(struct erofs_buf *buf,
 			      struct inode *inode, unsigned int *ofs)
@@ -149,6 +150,13 @@ err_out:
 	return ERR_PTR(err);
 }
 
+const struct inode_operations erofs_generic_iops = {
+#ifdef CONFIG_EROFS_FS_XATTR
+	.getxattr = generic_getxattr,
+	.listxattr = erofs_listxattr,
+#endif
+};
+
 static int erofs_fill_inode(struct inode *inode)
 {
 	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
@@ -165,6 +173,7 @@ static int erofs_fill_inode(struct inode *inode)
 	switch (inode->i_mode & S_IFMT) {
 	case S_IFREG:
 		inode->i_fop = &generic_ro_fops;
+		inode->i_op = &erofs_generic_iops;
 		break;
 	case S_IFDIR:
 		inode->i_op = &erofs_dir_iops;
@@ -172,6 +181,7 @@ static int erofs_fill_inode(struct inode *inode)
 		mapping_set_gfp_mask(inode->i_mapping, GFP_USER);
 		break;
 	case S_IFLNK:
+		inode->i_op = &erofs_generic_iops;
 		inode->i_op = &page_symlink_inode_operations;
 		break;
 	case S_IFCHR:
