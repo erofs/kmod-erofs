@@ -121,6 +121,14 @@ static void *erofs_read_inode(struct erofs_buf *buf,
 	case S_IFLNK:
 		vi->raw_blkaddr = le32_to_cpu(iu.raw_blkaddr);
 		break;
+	case S_IFCHR:
+	case S_IFBLK:
+		inode->i_rdev = new_decode_dev(le32_to_cpu(iu.rdev));
+		break;
+	case S_IFIFO:
+	case S_IFSOCK:
+		inode->i_rdev = 0;
+		break;
 	default:
 		erofs_err(sb, "bogus i_mode (%o) @ nid %llu", inode->i_mode,
 			  vi->nid);
@@ -166,6 +174,12 @@ static int erofs_fill_inode(struct inode *inode)
 	case S_IFLNK:
 		inode->i_op = &page_symlink_inode_operations;
 		break;
+	case S_IFCHR:
+	case S_IFBLK:
+	case S_IFIFO:
+	case S_IFSOCK:
+		init_special_inode(inode, inode->i_mode, inode->i_rdev);
+		goto out_unlock;
 	default:
 		err = -EFSCORRUPTED;
 		goto out_unlock;
