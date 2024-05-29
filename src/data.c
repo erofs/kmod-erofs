@@ -85,12 +85,6 @@ static int erofs_map_blocks_flatmode(struct inode *inode,
 	struct super_block *sb = inode->i_sb;
 	bool tailendpacking = (vi->datalayout == EROFS_INODE_FLAT_INLINE);
 
-	if (offset >= inode->i_size) {
-		/* leave out-of-bound access unmapped */
-		map->m_flags = 0;
-		map->m_plen = 0;
-		goto out;
-	}
 	nblocks = erofs_iblks(inode);
 	lastblk = nblocks - tailendpacking;
 
@@ -118,6 +112,83 @@ static int erofs_map_blocks_flatmode(struct inode *inode,
 		DBG_BUGON(1);
 		return -EIO;
 	}
+	return 0;
+}
+
+int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map)
+{
+	struct super_block *sb = inode->i_sb;
+	struct erofs_inode *vi = EROFS_I(inode);
+	struct erofs_inode_chunk_index *idx;
+	struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
+	u64 chunknr;
+	unsigned int unit;
+	erofs_off_t pos;
+	void *kaddr;
+	int err = 0;
+
+	if (map->m_la >= inode->i_size) {
+		/* leave out-of-bound access unmapped */
+		map->m_flags = 0;
+		map->m_plen = 0;
+		goto out;
+	}
+
+	if (vi->datalayout != EROFS_INODE_CHUNK_BASED) {
+		err = erofs_map_blocks_flatmode(inode, map);
+		goto out;
+	}
+
+	if (vi->chunkformat & EROFS_CHUNK_FORMAT_INDEXES)
+		unit = sizeof(*idx);			/* chunk index */
+	else
+		unit = EROFS_BLOCK_MAP_ENTRY_SIZE;	/* block map */
+
+	chunknr = map->m_la >> vi->chunkbits;
+	pos = ALIGN(erofs_iloc(inode) + vi->inode_isize +
+		    vi->xattr_isize, unit) + unit * chunknr;
+
+	kaddr = erofs_read_metabuf(&buf, sb, pos, EROFS_KMAP);
+	if (IS_ERR(kaddr)) {
+		err = PTR_ERR(kaddr);
+		goto out;
+	}
+	map->m_la = chunknr << vi->chunkbits;
+	map->m_plen = min_t(erofs_off_t, 1UL << vi->chunkbits,
+			round_up(inode->i_size - map->m_la, sb->s_blocksize));
+
+	/* handle block map */
+	if (!(vi->chunkformat & EROFS_CHUNK_FORMAT_INDEXES)) {
+		__le32 *blkaddr = kaddr;
+
+		if (le32_to_cpu(*blkaddr) == EROFS_NULL_ADDR) {
+			map->m_flags = 0;
+		} else {
+			map->m_pa = erofs_pos(sb, le32_to_cpu(*blkaddr));
+			map->m_flags = EROFS_MAP_MAPPED;
+		}
+		goto out_unlock;
+	}
+	/* parse chunk indexes */
+	idx = kaddr;
+	switch (le32_to_cpu(idx->blkaddr)) {
+	case EROFS_NULL_ADDR:
+		map->m_flags = 0;
+		break;
+	default:
+		/* only one device is supported for now */
+		if (idx->device_id) {
+			erofs_err(sb, "invalid device id %u @ %llu for nid %llu",
+				  le16_to_cpu(idx->device_id), chunknr, vi->nid);
+			err = -EFSCORRUPTED;
+			goto out_unlock;
+		}
+		map->m_pa = erofs_pos(sb, le32_to_cpu(idx->blkaddr));
+		map->m_flags = EROFS_MAP_MAPPED;
+		break;
+	}
+out_unlock:
+	erofs_put_metabuf(&buf);
 out:
 	map->m_llen = map->m_plen;
 	return 0;
@@ -133,7 +204,7 @@ int erofs_get_block(struct inode *inode, sector_t iblock,
 
 	map.m_la = iblock << inode->i_blkbits;
 	map.m_llen = round_up(bh->b_size, bsz);
-	ret = erofs_map_blocks_flatmode(inode, &map);
+	ret = erofs_map_blocks(inode, &map);
 	if (ret < 0)
 		return ret;
 	bh->b_size = round_up(map.m_llen, bsz);

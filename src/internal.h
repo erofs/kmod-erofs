@@ -114,7 +114,13 @@ struct erofs_inode {
 	unsigned int xattr_shared_count;
 	unsigned int *xattr_shared_xattrs;
 
-	erofs_blk_t raw_blkaddr;
+	union {
+		erofs_blk_t raw_blkaddr;
+		struct {
+			unsigned short	chunkformat;
+			unsigned char	chunkbits;
+		};
+	};
 
 	/* the corresponding vfs inode */
 	struct inode vfs_inode;

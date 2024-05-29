@@ -136,6 +136,19 @@ static void *erofs_read_inode(struct erofs_buf *buf,
 		err = -EFSCORRUPTED;
 		goto err_out;
 	}
+
+	if (vi->datalayout == EROFS_INODE_CHUNK_BASED) {
+		/* fill chunked inode summary info */
+		vi->chunkformat = le16_to_cpu(iu.c.format);
+		if (vi->chunkformat & ~EROFS_CHUNK_FORMAT_ALL) {
+			erofs_err(sb, "unsupported chunk format %x of nid %llu",
+				  vi->chunkformat, vi->nid);
+			err = -EOPNOTSUPP;
+			goto err_out;
+		}
+		vi->chunkbits = sb->s_blocksize_bits +
+			(vi->chunkformat & EROFS_CHUNK_FORMAT_BLKBITS_MASK);
+	}
 	inode->i_mtime.tv_sec = inode->i_ctime.tv_sec;
 	inode->i_atime.tv_sec = inode->i_ctime.tv_sec;
 	inode->i_mtime.tv_nsec = inode->i_ctime.tv_nsec;
