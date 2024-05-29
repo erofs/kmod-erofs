@@ -38,11 +38,13 @@ struct erofs_super_block {
  * EROFS inode datalayout (i_format in on-disk inode):
  * 0 - uncompressed flat inode without tail-packing inline data:
  * 2 - uncompressed flat inode with tail-packing inline data:
- * 3~7 - reserved
+ * 4 - chunk-based inode with (optional) multi-device support:
+ * 5~7 - reserved
  */
 enum {
 	EROFS_INODE_FLAT_PLAIN			= 0,
 	EROFS_INODE_FLAT_INLINE			= 2,
+	EROFS_INODE_CHUNK_BASED			= 4,
 	EROFS_INODE_DATALAYOUT_MAX
 };
 
@@ -55,6 +57,19 @@ enum {
 #define EROFS_I_ALL_BIT			4
 
 #define EROFS_I_ALL	((1 << EROFS_I_ALL_BIT) - 1)
+
+struct erofs_inode_chunk_info {
+	__le16 format;		/* chunk blkbits, etc. */
+	__le16 reserved;
+};
+
+/* indicate chunk blkbits, thus 'chunksize = blocksize << chunk blkbits' */
+#define EROFS_CHUNK_FORMAT_BLKBITS_MASK		0x001F
+/* with chunk indexes or just a 4-byte blkaddr array */
+#define EROFS_CHUNK_FORMAT_INDEXES		0x0020
+
+#define EROFS_CHUNK_FORMAT_ALL	\
+	(EROFS_CHUNK_FORMAT_BLKBITS_MASK | EROFS_CHUNK_FORMAT_INDEXES)
 
 /* 32-byte on-disk inode */
 #define EROFS_INODE_LAYOUT_COMPACT	0
@@ -70,6 +85,9 @@ union erofs_inode_i_u {
 
 	/* for device files, used to indicate old/new device # */
 	__le32 rdev;
+
+	/* for chunk-based files, it contains the summary info */
+	struct erofs_inode_chunk_info c;
 };
 
 /* 32-byte reduced form of an ondisk inode */
@@ -168,6 +186,19 @@ static inline unsigned int erofs_xattr_entry_size(struct erofs_xattr_entry *e)
 				 e->e_name_len + le16_to_cpu(e->e_value_size));
 }
 
+/* represent a zeroed chunk (hole) */
+#define EROFS_NULL_ADDR			-1
+
+/* 4-byte block address array */
+#define EROFS_BLOCK_MAP_ENTRY_SIZE	sizeof(__le32)
+
+/* 8-byte inode chunk indexes */
+struct erofs_inode_chunk_index {
+	__le16 advise;		/* always 0, don't care for now */
+	__le16 device_id;	/* back-end storage id (with bits masked) */
+	__le32 blkaddr;		/* start block address of this inode chunk */
+};
+
 /* dirent sorts in alphabet order, thus we can do binary search */
 struct erofs_dirent {
 	__le64 nid;     /* node number */
@@ -197,6 +228,8 @@ static inline void erofs_check_ondisk_layout_definitions(void)
 	BUILD_BUG_ON(sizeof(struct erofs_super_block) != 128);
 	BUILD_BUG_ON(sizeof(struct erofs_inode_compact) != 32);
 	BUILD_BUG_ON(sizeof(struct erofs_inode_extended) != 64);
+	BUILD_BUG_ON(sizeof(struct erofs_inode_chunk_info) != 4);
+	BUILD_BUG_ON(sizeof(struct erofs_inode_chunk_index) != 8);
 	BUILD_BUG_ON(sizeof(struct erofs_dirent) != 12);
 }
 
