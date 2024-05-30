@@ -1,0 +1,71 @@
+name: Release CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: "Prepare release"
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Push the latest tag
+      if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+      run: |
+        git push origin HEAD:refs/tags/latest --force
+    - name: Setup buildx instance
+      uses: docker/setup-buildx-action@v3
+      with:
+        use: true
+    - name: Build releases
+      shell: bash
+      run: |
+        docker buildx build . --build-arg SPECFILE=kmod-erofs.spec -o releases -f .github/workflows/cs7/Dockerfile
+        ls -lR releases
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: releases
+        path: releases/
+
+  release:
+    name: "Create release"
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: [build] 
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+    - name: Setup variables
+      run: |
+        cd releases
+        echo "files<<EOF" >> $GITHUB_ENV
+        for I in $(find . -type f); do echo "releases/${I}" >> $GITHUB_ENV; sha256sum "${I}" >> ../sha256sum; done
+        echo "EOF" >> $GITHUB_ENV
+        tag="latest"
+        [[ "$GITHUB_REF" = "refs/heads/"* ]] || tag=$(echo $GITHUB_REF | cut -d/ -f3-)
+        echo "tag=${tag}" >> $GITHUB_ENV
+    - name: Delete outdated release if exists
+      continue-on-error: true
+      run: |
+        gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+          /repos/"${repo}"/releases/tags/"${tag}" --jq '.url' | xargs -n1 gh api -X DELETE \
+          -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28"
+      env:
+          GH_TOKEN: ${{ github.token }}
+          repo: ${{ github.repository }}
+    - name: Create release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: "kmod-erofs ${{ env.tag }}"
+        tag_name: ${{ env.tag }}
+        prerelease: ${{ env.tag == 'latest' }}
+        generate_release_notes: true
+        files: |
+          ${{ env.files }}
+          sha256sum
